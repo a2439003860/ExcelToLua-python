@@ -14,6 +14,7 @@ Excel转Lua转换器
 import os
 import sys
 import re
+import shutil
 from typing import Dict, List, Any, Tuple, Optional
 import warnings
 
@@ -29,8 +30,11 @@ except ImportError:
 
 class ExcelToLuaConverter:
     def __init__(self):
-        self.excel_dir = os.path.join(os.path.dirname(__file__), "excel")
-        self.lua_dir = os.path.join(os.path.dirname(__file__), "lua")
+        self.base_dir = os.path.dirname(__file__)
+        self.excel_dir = os.path.join(self.base_dir, "excel")
+        self.lua_dir = os.path.join(self.base_dir, "lua")
+        self.config_path = os.path.join(self.base_dir, "config")
+        self.generated_lua_paths = []
         self.duplicate_ids = {}  # 存储重复ID信息
         self.skipped_columns = {}  # 存储跳过的列信息[6](@ref)
         
@@ -43,6 +47,53 @@ class ExcelToLuaConverter:
         if not os.path.exists(self.lua_dir):
             os.makedirs(self.lua_dir)
             print(f"创建lua目录: {self.lua_dir}")
+
+    def get_copy_target_dir(self) -> Optional[str]:
+        """Read optional lua copy target from config."""
+        if not os.path.exists(self.config_path):
+            return None
+
+        try:
+            with open(self.config_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    config_value = line.strip()
+                    if not config_value or config_value.startswith('#'):
+                        continue
+                    if '=' in config_value:
+                        config_value = config_value.split('=', 1)[1].strip()
+                    config_value = config_value.strip('"').strip("'")
+                    if not config_value:
+                        continue
+                    if not os.path.isabs(config_value):
+                        config_value = os.path.join(self.base_dir, config_value)
+                    return os.path.abspath(config_value)
+        except Exception as e:
+            print(f"警告: 读取config失败 - {str(e)}")
+            return None
+
+        return None
+
+    def copy_generated_lua_files(self):
+        """Copy generated lua files to the configured target directory."""
+        target_dir = self.get_copy_target_dir()
+        if not target_dir:
+            return
+
+        try:
+            os.makedirs(target_dir, exist_ok=True)
+        except Exception as e:
+            print(f"警告: 创建Lua复制目标目录失败 - {str(e)}")
+            return
+
+        copied_count = 0
+        for lua_path in self.generated_lua_paths:
+            try:
+                shutil.copy2(lua_path, os.path.join(target_dir, os.path.basename(lua_path)))
+                copied_count += 1
+            except Exception as e:
+                print(f"警告: 复制 {os.path.basename(lua_path)} 失败 - {str(e)}")
+
+        print(f"Lua文件已复制到: {target_dir} ({copied_count}/{len(self.generated_lua_paths)})")
     
     def should_skip_file(self, filename: str) -> bool:
         """判断是否需要跳过文件"""
@@ -335,6 +386,8 @@ class ExcelToLuaConverter:
             
             with open(lua_path, 'w', encoding='utf-8') as f:
                 f.write(lua_content)
+
+            self.generated_lua_paths.append(lua_path)
             
             print(f"  成功: 生成 {lua_filename} ({len(data_rows)}行数据, {len(valid_columns)}列数据)")
             return True
@@ -482,6 +535,9 @@ class ExcelToLuaConverter:
         
         # 显示重复ID警告
         self.print_duplicate_warnings()
+
+        # 根据config复制本次生成的Lua文件
+        self.copy_generated_lua_files()
         
         print("-" * 40)
         print(f"转换完成: {success_count}/{len(excel_files)} 个文件转换成功")
@@ -495,7 +551,10 @@ def main():
     
     # 等待用户按键（在批处理中运行时不等待）
     if sys.platform == "win32" and sys.stdin.isatty():
-        input("\n按Enter键退出...")
+        try:
+            input("\n按Enter键退出...")
+        except EOFError:
+            pass
 
 
 if __name__ == "__main__":

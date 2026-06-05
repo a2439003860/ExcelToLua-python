@@ -17,6 +17,7 @@ Excel转Lua转换工具
 项目根目录/
 ├── convert_excel_to_lua.bat  # 主批处理文件
 ├── excel_to_lua.py           # Python转换脚本
+├── config                    # Lua复制目标路径配置文件
 ├── excel/                    # Excel文件存放目录（自动创建）
 └── lua/                      # 生成的Lua文件目录（自动创建）
 
@@ -33,6 +34,26 @@ openpyxl库（首次运行会自动安装）
 将Excel文件放入自动创建的 excel目录
 
 工具会自动转换并在 lua目录生成对应文件
+
+如果存在 config 文件，工具会在转换完成后，将本次成功生成的Lua文件再复制一份到 config 指定的目录。
+复制时会默认覆盖目标目录中的同名文件。
+
+当前 config 默认内容为：
+..\APR\Assets\Data\Config
+
+该路径为相对路径，表示复制到同级Unity工程 APR 的 Assets\Data\Config 目录。
+
+修改复制目标路径：
+直接打开 config 文件，将第一行改为需要复制到的目录即可。
+支持相对路径和绝对路径。
+相对路径以本工具所在目录（配置表目录）为基准。
+
+示例：
+..\APR\Assets\Data\Config
+D:\Project\MyUnityGame\Assets\Data\Config
+target=..\APR\Assets\Data\Config
+
+如果不需要额外复制，可以删除 config 文件，或将其中的有效路径行清空。
 
 Excel文件格式要求
 文件格式：.xlsx格式
