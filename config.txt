@@ -1,0 +1,11 @@
+# 是否复制生成的Lua文件：0不复制，1复制
+copy=1
+
+# Lua复制目标目录，支持相对路径和绝对路径
+target=..\APR\Assets\Data\Config
+
+# 是否显示具体跳过了哪一列、哪一行：0不显示，1显示
+show_skip_details=0
+
+# 是否输出日志：0不输出，1输出
+output_log=0

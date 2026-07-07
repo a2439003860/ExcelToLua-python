@@ -15,6 +15,7 @@ import os
 import sys
 import re
 import shutil
+from datetime import datetime
 from typing import Dict, List, Any, Tuple, Optional
 import warnings
 
@@ -28,15 +29,30 @@ except ImportError:
     sys.exit(1)
 
 
+class TeeLogger:
+    def __init__(self, *streams):
+        self.streams = streams
+
+    def write(self, text):
+        for stream in self.streams:
+            stream.write(text)
+
+    def flush(self):
+        for stream in self.streams:
+            stream.flush()
+
+
 class ExcelToLuaConverter:
     def __init__(self):
         self.base_dir = os.path.dirname(__file__)
         self.excel_dir = os.path.join(self.base_dir, "excel")
         self.lua_dir = os.path.join(self.base_dir, "lua")
-        self.config_path = os.path.join(self.base_dir, "config")
+        self.config_path = os.path.join(self.base_dir, "config.txt")
         self.generated_lua_paths = []
         self.duplicate_ids = {}  # 存储重复ID信息
         self.skipped_columns = {}  # 存储跳过的列信息[6](@ref)
+        self.skipped_column_details = {}
+        self.skipped_row_details = {}
         
     def ensure_dirs(self):
         """确保必要的目录存在"""
@@ -48,35 +64,83 @@ class ExcelToLuaConverter:
             os.makedirs(self.lua_dir)
             print(f"创建lua目录: {self.lua_dir}")
 
-    def get_copy_target_dir(self) -> Optional[str]:
-        """Read optional lua copy target from config."""
+    def read_config_values(self) -> Dict[str, str]:
+        """Read key=value pairs from config.txt."""
+        values = {}
         if not os.path.exists(self.config_path):
-            return None
+            return values
 
         try:
             with open(self.config_path, 'r', encoding='utf-8') as f:
                 for line in f:
-                    config_value = line.strip()
-                    if not config_value or config_value.startswith('#'):
+                    config_line = line.strip()
+                    if not config_line or config_line.startswith('#') or '=' not in config_line:
                         continue
-                    if '=' in config_value:
-                        config_value = config_value.split('=', 1)[1].strip()
-                    config_value = config_value.strip('"').strip("'")
-                    if not config_value:
-                        continue
-                    if not os.path.isabs(config_value):
-                        config_value = os.path.join(self.base_dir, config_value)
-                    return os.path.abspath(config_value)
+
+                    key, value = config_line.split('=', 1)
+                    values[key.strip().lower()] = value.strip().strip('"').strip("'")
         except Exception as e:
-            print(f"警告: 读取config失败 - {str(e)}")
+            print(f"警告: 读取config.txt失败 - {str(e)}")
+
+        return values
+
+    def get_config_bool(self, keys: Tuple[str, ...], default: bool = False) -> bool:
+        values = self.read_config_values()
+        for key in keys:
+            value = values.get(key.lower())
+            if value is not None:
+                return value == "1"
+        return default
+
+    def should_show_skip_details(self) -> bool:
+        return self.get_config_bool(("show_skip_details", "show_skipped_details", "skip_details", "显示跳过详情"))
+
+    def should_write_log(self) -> bool:
+        return self.get_config_bool(("output_log", "write_log", "log", "输出日志", "输入日志"))
+
+    def setup_logging(self):
+        if not self.should_write_log():
             return None
 
-        return None
+        log_dir = os.path.join(self.base_dir, "log")
+        os.makedirs(log_dir, exist_ok=True)
+        log_path = os.path.join(log_dir, datetime.now().strftime("%Y%m%d_%H%M%S.log"))
+        log_file = open(log_path, 'w', encoding='utf-8')
+        sys.stdout = TeeLogger(sys.__stdout__, log_file)
+        sys.stderr = TeeLogger(sys.__stderr__, log_file)
+        print(f"日志输出到: {log_path}")
+        return log_file
+
+    def read_copy_config(self) -> Tuple[bool, Optional[str]]:
+        """Read lua copy switch and target from config.txt."""
+        try:
+            values = self.read_config_values()
+            copy_enabled = values.get("copy", values.get("copy_enabled", values.get("enable_copy", values.get("是否复制", "0")))) == "1"
+            target_dir = None
+            for key in ("target", "target_dir", "copy_target", "path", "dir", "复制目录"):
+                if key in values:
+                    target_dir = values[key]
+                    break
+
+            if not copy_enabled:
+                return False, None
+
+            if not target_dir:
+                print("警告: config.txt 中 copy=1，但未配置 target 复制目录")
+                return False, None
+
+            if not os.path.isabs(target_dir):
+                target_dir = os.path.join(self.base_dir, target_dir)
+            return True, os.path.abspath(target_dir)
+        except Exception as e:
+            print(f"警告: 读取config.txt失败 - {str(e)}")
+            return False, None
 
     def copy_generated_lua_files(self):
         """Copy generated lua files to the configured target directory."""
-        target_dir = self.get_copy_target_dir()
-        if not target_dir:
+        copy_enabled, target_dir = self.read_copy_config()
+        if not copy_enabled:
+            print("Lua复制开关未开启，跳过额外复制")
             return
 
         try:
@@ -289,6 +353,7 @@ class ExcelToLuaConverter:
             # 获取列数
             max_column = ws.max_column
             max_row = ws.max_row
+            filename = os.path.basename(excel_path)
             
             if max_row < 3:
                 print(f"  警告: 文件行数不足3行，跳过")
@@ -299,11 +364,13 @@ class ExcelToLuaConverter:
             keys = []
             valid_columns = []  # 记录有效列的索引[6](@ref)
             is_id_col = -1  # ID列的索引
+            skipped_column_details = []
             
             for col in range(1, max_column + 1):
                 # 检查第三行参数是否为空[6](@ref)
                 key_cell = ws.cell(row=3, column=col).value
                 if self.is_column_empty(key_cell):
+                    skipped_column_details.append((col, get_column_letter(col)))
                     continue  # 跳过该列[7](@ref)
                 
                 # 记录有效列
@@ -323,10 +390,10 @@ class ExcelToLuaConverter:
                     is_id_col = len(keys) - 1  # 更新为有效列中的索引
             
             # 记录跳过的列信息[6](@ref)
-            filename = os.path.basename(excel_path)
             skipped_count = max_column - len(valid_columns)
             if skipped_count > 0:
                 self.skipped_columns[filename] = skipped_count
+                self.skipped_column_details[filename] = skipped_column_details
             
             if len(valid_columns) == 0:
                 print(f"  警告: 没有有效的列，跳过文件")
@@ -335,11 +402,13 @@ class ExcelToLuaConverter:
             # 收集数据行
             data_rows = []
             id_values = []  # 存储ID值用于重复检查
+            skipped_row_details = []
             
             for row in range(4, max_row + 1):
                 # 检查第一列是否需要跳过
                 first_cell = ws.cell(row=row, column=1).value
                 if self.should_skip_row(first_cell):
+                    skipped_row_details.append((row, "" if first_cell is None else str(first_cell).strip()))
                     continue
                 
                 # 读取该行数据（只读取有效列）
@@ -363,6 +432,9 @@ class ExcelToLuaConverter:
                         if id_key in row_data:
                             id_value = row_data[id_key]
                             id_values.append(id_value)
+
+            if skipped_row_details:
+                self.skipped_row_details[filename] = skipped_row_details
             
             # 检查重复ID
             if is_id_col >= 0:
@@ -483,18 +555,32 @@ class ExcelToLuaConverter:
         print("="*60)
     
     def print_skipped_columns_info(self):
-        """打印跳过的列信息"""
-        if not self.skipped_columns:
+        """打印跳过的列/行信息"""
+        if not self.skipped_columns and not self.skipped_row_details:
             return
         
         print("\n" + "="*60)
-        print("跳过的列统计（第三行参数为空）")
+        print("跳过的列/行统计")
         print("="*60)
-        
+
+        show_details = self.should_show_skip_details()
         for filename, skipped_count in self.skipped_columns.items():
-            print(f"文件: {filename} - 跳过了 {skipped_count} 列")
-        
-        print("\n注意: 以上列因第三行参数为空而被跳过")
+            print(f"文件: {filename} - 跳过了 {skipped_count} 列（第三行参数为空）")
+            if show_details:
+                for col_index, col_letter in self.skipped_column_details.get(filename, []):
+                    print(f"  跳过列: {col_letter}列（第{col_index}列）")
+
+        for filename, row_details in self.skipped_row_details.items():
+            print(f"文件: {filename} - 跳过了 {len(row_details)} 行（第一列为空或以/、?开头）")
+            if show_details:
+                for row_index, first_cell in row_details:
+                    reason = "第一列为空" if not first_cell else f"第一列内容为 '{first_cell}'"
+                    print(f"  跳过行: 第{row_index}行（{reason}）")
+
+        if not show_details:
+            print("\n提示: 如需显示具体跳过了哪一列、哪一行，可在 config.txt 中设置 show_skip_details=1")
+
+        print("\n注意: 空列因第三行参数为空而被跳过；行因第一列为空或以/、?开头而被跳过")
         print("="*60)
     
     def run_conversion(self):
@@ -547,14 +633,21 @@ class ExcelToLuaConverter:
 def main():
     """主函数"""
     converter = ExcelToLuaConverter()
-    converter.run_conversion()
-    
-    # 等待用户按键（在批处理中运行时不等待）
-    if sys.platform == "win32" and sys.stdin.isatty():
-        try:
-            input("\n按Enter键退出...")
-        except EOFError:
-            pass
+    log_file = converter.setup_logging()
+    try:
+        converter.run_conversion()
+        
+        # 等待用户按键（在批处理中运行时不等待）
+        if sys.platform == "win32" and sys.stdin.isatty():
+            try:
+                input("\n按Enter键退出...")
+            except EOFError:
+                pass
+    finally:
+        if log_file:
+            sys.stdout = sys.__stdout__
+            sys.stderr = sys.__stderr__
+            log_file.close()
 
 
 if __name__ == "__main__":

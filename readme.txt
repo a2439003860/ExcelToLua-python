@@ -17,8 +17,9 @@ Excel转Lua转换工具
 项目根目录/
 ├── convert_excel_to_lua.bat  # 主批处理文件
 ├── excel_to_lua.py           # Python转换脚本
-├── config                    # Lua复制目标路径配置文件
+├── config.txt                # Lua复制开关和目标路径配置文件
 ├── excel/                    # Excel文件存放目录（自动创建）
+├── log/                      # 日志输出目录（开启日志后自动创建）
 └── lua/                      # 生成的Lua文件目录（自动创建）
 
 使用说明
@@ -35,25 +36,51 @@ openpyxl库（首次运行会自动安装）
 
 工具会自动转换并在 lua目录生成对应文件
 
-如果存在 config 文件，工具会在转换完成后，将本次成功生成的Lua文件再复制一份到 config 指定的目录。
+如果存在 config.txt 文件，且复制开关为1，工具会在转换完成后，将本次成功生成的Lua文件再复制一份到 config.txt 指定的目录。
 复制时会默认覆盖目标目录中的同名文件。
 
-当前 config 默认内容为：
-..\APR\Assets\Data\Config
+当前 config.txt 默认内容为：
+# 是否复制生成的Lua文件：0不复制，1复制
+copy=1
+
+# Lua复制目标目录，支持相对路径和绝对路径
+target=..\APR\Assets\Data\Config
+
+# 是否显示具体跳过了哪一列、哪一行：0不显示，1显示
+show_skip_details=0
+
+# 是否输出日志：0不输出，1输出
+output_log=0
 
 该路径为相对路径，表示复制到同级Unity工程 APR 的 Assets\Data\Config 目录。
 
+修改复制开关：
+直接打开 config.txt 文件，将 copy 改为0或1。
+copy=0 表示不复制，只生成到本工具的 lua 目录。
+copy=1 表示复制到 target 指定目录。
+
 修改复制目标路径：
-直接打开 config 文件，将第一行改为需要复制到的目录即可。
+直接打开 config.txt 文件，将 target 改为需要复制到的目录即可。
 支持相对路径和绝对路径。
 相对路径以本工具所在目录（配置表目录）为基准。
 
 示例：
-..\APR\Assets\Data\Config
-D:\Project\MyUnityGame\Assets\Data\Config
+copy=1
 target=..\APR\Assets\Data\Config
 
-如果不需要额外复制，可以删除 config 文件，或将其中的有效路径行清空。
+copy=1
+target=D:\Project\MyUnityGame\Assets\Data\Config
+
+如果不需要额外复制，推荐将 config.txt 中的 copy 改为0。
+
+跳过详情开关：
+show_skip_details=0 表示只显示跳过统计。
+show_skip_details=1 表示额外显示具体跳过了哪一列、哪一行。
+
+日志开关：
+output_log=0 表示不输出日志。
+output_log=1 表示将本次转换时控制台显示的内容同时输出到 log 文件夹。
+日志文件名格式为：系统日期_系统时间.log，精确到秒，例如 20260707_183045.log。
 
 Excel文件格式要求
 文件格式：.xlsx格式
@@ -99,6 +126,7 @@ ID列检测：自动识别字段名为"ID"的列并进行重复检查
 错误处理
 工具会自动检测并显示重复ID警告
 转换失败时会显示具体错误信息
+开启 output_log 后，转换日志会保存到 log 文件夹
 支持重新运行和查看输出目录
 
 常见问题
